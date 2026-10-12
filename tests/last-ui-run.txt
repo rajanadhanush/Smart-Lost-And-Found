@@ -1,0 +1,35 @@
+PASS  Home: greeting, two CTAs, empty states, no fake notifications                                                                                                    
+PASS  Lost report: brand optional, review step, double-click creates ONE report, no phone stored                                                                       
+PASS  Edit before submitting keeps the entered data                                                                                                                    
+PASS  Found report requires a photo; it is shrunk and saved inside the report (no Storage), with preview/remove                                                        
+PASS  Public text with serial/ID/phone is blocked (use the private box)                                                                                                
+PASS  Bad photo file (text renamed .png) is rejected with a clear message and nothing is created                                                                       
+PASS  Large phone photo is shrunk under the Firestore cap                                                                                                              
+PASS  A photo that cannot be shrunk enough (pure noise) gets a friendly error and nothing is stored                                                                    
+PASS  Matches: explanation list, estimate wording, compare view, other-university report not visible                                                                   
+PASS  Claim with PDF evidence: stored in claimEvidence in the SAME transaction, item reserved atomically, timeline shown                                               
+PASS  PDF over 480 KB is refused with advice (free plan limit); a big photo proof is shrunk and accepted                                                               
+PASS  Disguised file (.exe renamed .pdf) is rejected, no claim, no stored file                                                                                         
+PASS  Concurrent claim: loser gets a clear message, no claim record and NO evidence left behind                                                                        
+PASS  Notifications are computed in the browser: unread count, only mine, mark one (device), mark all (saved on profile), nothing written to a notifications collection
+PASS  Notifications: a finder is told when a claim is held on their item; staff are told about new claims                                                              
+PASS  Notifications: staff see "New claim to review"                                                                                                                   
+PASS  Claimant cancels: claim cancelled, item released (not stuck reserved), timeline event                                                                            
+PASS  Staff workflow: review -> approve -> handover, audit trail, metrics, no AI auto-approval                                                                         
+PASS  Staff CSV export: no phone numbers, formula cells neutralised                                                                                                    
+PASS  Student never sees staff UI                                                                                                                                      
+PASS  Pinky with AI switched off (no key): FAQ works, status shows ONLY my claims, other questions get a clear fallback, no network call                               
+PASS  Pinky with a Gemini key: model fallback on 404, labelled answer, key sent as header only, NO private data in the prompt                                          
+PASS  Pinky: rate-limited by Google (429) shows a friendly message and the chips; browser-side throttle stops floods                                                   
+PASS  Compare: without a key there is no AI button; the comparison still works                                                                                         
+PASS  Compare: with a key the AI check returns a labelled estimate; only public fields are sent; failures fall back                                                    
+PASS  Compare: AI failure (500) shows a fallback message                                                                                                               
+PASS  Staff can open a private proof file; a tampered non-data value is refused (no network fetch)                                                                     
+PASS  Search & filters: type, category, text, clear                                                                                                                    
+PASS  Home shows matches + active claims + recent items                                                                                                                
+PASS  Responsive mobile 360px: no horizontal overflow on any tab                                                                                                       
+PASS  Responsive tablet 768px: no horizontal overflow on any tab                                                                                                       
+PASS  Responsive laptop 1280px: no horizontal overflow on any tab                                                                                                      
+PASS  Staff dashboard responsive screenshot                                                                                                                            
+
+33/33 passed

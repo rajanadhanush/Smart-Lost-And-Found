@@ -1,0 +1,6 @@
+{
+  "name": "smart-lost-and-found-admin-scripts",
+  "private": true,
+  "description": "Optional admin scripts. They run on your own computer with the Admin SDK, which works on the free Spark plan.",
+  "dependencies": { "firebase-admin": "^12.7.0" }
+}

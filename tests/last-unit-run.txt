@@ -1,0 +1,15 @@
+PASS  matching: strong match scores high and explains itself
+PASS  matching: different category is capped at 35%
+PASS  matching: missing brand/colour is not penalised
+PASS  matching: conflicting brand lowers the score; garbage input does not throw
+PASS  no Cloud Functions or Cloud Storage anywhere (both need the paid Blaze plan)
+PASS  secrets: Gemini key field is EMPTY in the shipped file; no private keys; only the public Firebase web key
+PASS  AI: only public report fields go into the Gemini prompt; no phone/proof/private/evidence fields
+PASS  client status machine mirrors firestore.rules transitions
+PASS  rules: users cannot write role/isAdmin; notifications are not a collection any more
+PASS  rules: private proof files can only be created with their claim and never edited; reports carry inline photos only
+PASS  rules: every report status write stamps updatedAt (client and rules agree)
+PASS  rules: braces and parentheses balanced
+PASS  index.html script parses
+
+13/13 passed

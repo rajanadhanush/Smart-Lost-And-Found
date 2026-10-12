@@ -1,0 +1,236 @@
+rules_version = '2';
+// Smart Lost & Found v23-spark - Firestore Security Rules (free Spark plan: no Cloud Functions, no Cloud Storage)
+// Roles: staff are users whose /users/{uid} document has role == 'admin' (or the legacy isAdmin == true), or who carry the
+// custom claim admin == true. Users can never write those fields themselves (see /users rules). Set roles in the Firebase
+// console (Firestore > users > <uid> > role = "admin") or with the optional scripts/set-admin.js.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function signedIn() { return request.auth != null; }
+    function verified() { return signedIn() && request.auth.token.email_verified == true; }
+    function userPath(uid) { return /databases/$(database)/documents/users/$(uid); }
+    function hasUser(uid) { return exists(userPath(uid)); }
+    function udoc(uid) { return get(userPath(uid)).data; }
+    function isStaff() {
+      return verified() && (request.auth.token.admin == true ||
+        (hasUser(request.auth.uid) &&
+          (udoc(request.auth.uid).get('role', '') == 'admin' || udoc(request.auth.uid).get('isAdmin', false) == true)));
+    }
+    function myScope() { return hasUser(request.auth.uid) ? udoc(request.auth.uid).get('scope', '') : ''; }
+    function reportPath(id) { return /databases/$(database)/documents/reports/$(id); }
+    function claimPath(id) { return /databases/$(database)/documents/claims/$(id); }
+    function evidencePath(id) { return /databases/$(database)/documents/claimEvidence/$(id); }
+
+    // ---------- users ----------
+    match /users/{uid} {
+      allow read: if verified() && (request.auth.uid == uid || isStaff());
+      // Profile is created right after sign-up (email not verified yet). Role is forced to 'student'.
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name','studentId','dept','phone','email','role','university','campus','universityName','scope','photoURL','createdAt'])
+        && request.resource.data.role == 'student'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.name is string && request.resource.data.name.size() >= 2 && request.resource.data.name.size() <= 80
+        && request.resource.data.get('scope', '').size() <= 120
+        && request.resource.data.get('phone', '').size() <= 20;
+      // Role, isAdmin, email, createdAt can never change from the client.
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['name','studentId','dept','phone','university','campus','universityName','scope','photoURL','notifSeenAt'])
+        && (!('notifSeenAt' in request.resource.data) || request.resource.data.notifSeenAt is number)
+        && request.resource.data.name.size() >= 2 && request.resource.data.name.size() <= 80
+        && request.resource.data.get('scope', '').size() <= 120
+        && request.resource.data.get('phone', '').size() <= 20
+        && request.resource.data.get('photoURL', '').size() <= 150000;
+      allow delete: if false;
+    }
+
+    // ---------- reports (public within a university scope; never contains phone numbers) ----------
+    function validReport() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['type','cat','title','brand','color','date','time','loc','building','floor','area','desc','photo','uid','name','university','campus','scope','status','createdAt'])
+        && d.keys().hasAll(['type','cat','loc','date','uid','name','scope','status','createdAt'])
+        && d.type in ['lost','found']
+        && d.cat is string && d.cat.size() >= 1 && d.cat.size() <= 40
+        && d.get('title', '').size() <= 80
+        && d.get('brand', '').size() <= 40
+        && d.get('color', '') in ['', 'Red', 'Blue', 'Green', 'Yellow', 'Transparent']
+        && d.date is string && d.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && d.get('time', '').matches('^([0-9]{2}:[0-9]{2})?$')
+        && d.loc is string && d.loc.size() >= 2 && d.loc.size() <= 80
+        && d.get('building', '').size() <= 60 && d.get('floor', '').size() <= 20 && d.get('area', '').size() <= 80
+        && d.get('desc', '').size() <= 600
+        && d.get('photo', '').size() <= 70000
+        && (d.get('photo', '') == '' || d.photo.matches('^data:image/(jpeg|png|webp);base64,.*'))
+        && (d.type == 'lost' || d.get('photo', '') != '')
+        && d.uid == request.auth.uid && d.status == 'open' && d.createdAt == request.time
+        && d.scope == myScope() && d.scope != ''
+        && d.name == udoc(request.auth.uid).get('name', '');
+    }
+    match /reports/{reportId} {
+      allow read: if verified() && (isStaff() || resource.data.get('uid', '') == request.auth.uid
+        || (myScope() != '' && resource.data.get('scope', '') == myScope()));
+      allow create: if verified() && validReport();
+      allow update: if verified() && (
+        // 1) claimant reserves an open found item - only valid together with the claim created in the SAME batch/transaction
+        ( resource.data.type == 'found' && resource.data.status == 'open'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','heldClaimId','updatedAt'])
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.status == 'held'
+          && request.resource.data.heldClaimId is string
+          && resource.data.get('scope', '') == myScope()
+          && existsAfter(claimPath(request.resource.data.heldClaimId))
+          && getAfter(claimPath(request.resource.data.heldClaimId)).data.uid == request.auth.uid
+          && getAfter(claimPath(request.resource.data.heldClaimId)).data.foundId == reportId )
+        // 2) claimant releases its own reservation when cancelling
+        || ( resource.data.status == 'held' && request.resource.data.status == 'open'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','heldClaimId','updatedAt'])
+          && request.resource.data.updatedAt == request.time
+          && !('heldClaimId' in request.resource.data)
+          && get(claimPath(resource.data.heldClaimId)).data.uid == request.auth.uid
+          && getAfter(claimPath(resource.data.heldClaimId)).data.status == 'cancelled' )
+        // 3) staff change status only
+        || ( isStaff()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','heldClaimId','updatedAt'])
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.status in ['open','held','returned'] )
+      );
+      allow delete: if isStaff();
+    }
+
+    // Hidden identifying details that a reporter adds to verify ownership later. Never shown in the feed.
+    match /reportPrivate/{reportId} {
+      allow read: if verified() && (resource.data.uid == request.auth.uid || isStaff());
+      allow create: if verified()
+        && request.resource.data.keys().hasOnly(['uid','note','scope','createdAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.note is string && request.resource.data.note.size() <= 500
+        && request.resource.data.createdAt == request.time
+        && existsAfter(reportPath(reportId)) && getAfter(reportPath(reportId)).data.uid == request.auth.uid;
+      allow update: if false;
+      allow delete: if isStaff();
+    }
+
+    // ---------- claims (private: claimant + staff only) ----------
+    function validClaimCreate(cid) {
+      let d = request.resource.data;
+      let fp = reportPath(d.foundId);
+      let lp = reportPath(d.lostId);
+      return d.keys().hasOnly(['foundId','lostId','uid','name','phone','scope','proof','evidenceId','evidenceName','evidenceType','evidenceSize','status','createdAt','updatedAt'])
+        && d.keys().hasAll(['foundId','lostId','uid','name','scope','proof','status','createdAt','updatedAt'])
+        && d.uid == request.auth.uid && d.status == 'pending_verification'
+        && d.createdAt == request.time && d.updatedAt == request.time
+        && d.proof is string && d.proof.size() >= 4 && d.proof.size() <= 600
+        && d.name == udoc(request.auth.uid).get('name', '')
+        && d.get('phone', '') == udoc(request.auth.uid).get('phone', '')
+        && (d.get('evidenceId', '') == '' || (d.evidenceId == cid + '_main' && existsAfter(evidencePath(cid + '_main'))))
+        && d.get('evidenceSize', 0) <= 20971520
+        && d.scope == myScope() && d.scope != ''
+        && get(fp).data.type == 'found' && get(fp).data.status == 'open' && get(fp).data.get('scope', '') == d.scope
+        && get(lp).data.type == 'lost' && get(lp).data.uid == request.auth.uid && get(lp).data.get('scope', '') == d.scope
+        && getAfter(fp).data.status == 'held' && getAfter(fp).data.heldClaimId == cid;
+    }
+    function ownerClaimUpdate(cid) {
+      let o = resource.data;
+      let n = request.resource.data;
+      let ch = n.diff(o).affectedKeys();
+      return o.uid == request.auth.uid && (
+        // cancel before approval - the report must be released in the same batch
+        ( o.status in ['pending_verification','pending','under_review','more_info'] && n.status == 'cancelled'
+          && ch.hasOnly(['status','updatedAt']) && n.updatedAt == request.time
+          && getAfter(reportPath(o.foundId)).data.status == 'open' )
+        // answer a staff request for more proof
+        || ( o.status == 'more_info' && n.status == 'under_review'
+          && ch.hasOnly(['status','updatedAt','extraProof','extraEvidenceId','extraEvidenceName','extraEvidenceType','extraEvidenceSize'])
+          && n.updatedAt == request.time
+          && n.extraProof is string && n.extraProof.size() >= 4 && n.extraProof.size() <= 600
+          && (n.get('extraEvidenceId', '') == '' || (n.extraEvidenceId.matches('^' + cid + '_x[0-9]{13}$') && existsAfter(evidencePath(n.extraEvidenceId)))) )
+        // star rating after the item was returned
+        || ( o.status == 'returned' && ch.hasOnly(['rating','comment','ratedAt']) && !('rating' in o)
+          && n.rating is int && n.rating >= 1 && n.rating <= 5
+          && n.get('comment', '').size() <= 500 && n.ratedAt == request.time ) );
+    }
+    function staffClaimUpdate() {
+      let o = resource.data;
+      let n = request.resource.data;
+      let ch = n.diff(o).affectedKeys();
+      let f = getAfter(reportPath(o.foundId)).data;
+      return isStaff()
+        && ch.hasOnly(['status','updatedAt','reviewedBy','reviewNote','moreInfoRequest','finderName','finderPhone','ownerName','ownerPhone','returnedAt'])
+        && n.reviewedBy == request.auth.uid && n.updatedAt == request.time
+        && n.get('reviewNote', '').size() <= 500 && n.get('moreInfoRequest', '').size() <= 500
+        && ( (o.status in ['pending_verification','pending'] && n.status in ['under_review','more_info','approved','rejected'])
+          || (o.status == 'under_review' && n.status in ['more_info','approved','rejected'])
+          || (o.status == 'more_info' && n.status in ['under_review','rejected'])
+          || (o.status == 'approved' && n.status in ['returned','rejected']) )
+        && ( (n.status in ['under_review','more_info','approved'] && f.status == 'held')
+          || (n.status == 'rejected' && f.status == 'open')
+          || (n.status == 'returned' && f.status == 'returned' && n.returnedAt == request.time
+              && getAfter(reportPath(o.lostId)).data.status == 'returned') );
+    }
+    match /claims/{claimId} {
+      allow read: if verified() && (resource.data.uid == request.auth.uid || isStaff());
+      allow create: if verified() && validClaimCreate(claimId);
+      allow update: if verified() && (ownerClaimUpdate(claimId) || staffClaimUpdate());
+      allow delete: if isStaff();
+
+      // Immutable timeline entries; each must match the claim status written in the same batch.
+      match /events/{eventId} {
+        allow read: if verified() && (get(claimPath(claimId)).data.uid == request.auth.uid || isStaff());
+        allow create: if verified()
+          && request.resource.data.keys().hasOnly(['status','by','byRole','note','at'])
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.at == request.time
+          && request.resource.data.get('note', '').size() <= 500
+          && getAfter(claimPath(claimId)).data.status == request.resource.data.status
+          && ( (request.resource.data.byRole == 'staff' && isStaff())
+            || (request.resource.data.byRole == 'claimant' && getAfter(claimPath(claimId)).data.uid == request.auth.uid) );
+        allow update: if false;
+        allow delete: if isStaff();
+      }
+    }
+
+    // ---------- private proof files (replaces Cloud Storage on the Spark plan) ----------
+    // One small document per attachment. Created ONLY in the same batch/transaction as the claim (or the "more proof" update) that
+    // points at it, so there are no orphaned files. Readable by the claimant and staff only. Never editable.
+    match /claimEvidence/{eid} {
+      allow read: if verified() && (resource.data.uid == request.auth.uid || isStaff());
+      allow create: if verified()
+        && request.resource.data.keys().hasOnly(['uid','claimId','kind','name','type','size','data','scope','createdAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.kind in ['main','extra']
+        && request.resource.data.claimId is string
+        && request.resource.data.type in ['image/jpeg','image/png','image/webp','application/pdf']
+        && request.resource.data.name is string && request.resource.data.name.size() <= 100
+        && request.resource.data.size is int && request.resource.data.size <= 20971520
+        && request.resource.data.data is string && request.resource.data.data.size() <= 700000
+        && request.resource.data.data.matches('^data:(image/(jpeg|png|webp)|application/pdf);base64,.*')
+        && request.resource.data.createdAt == request.time
+        && existsAfter(claimPath(request.resource.data.claimId))
+        && getAfter(claimPath(request.resource.data.claimId)).data.uid == request.auth.uid
+        && ( (request.resource.data.kind == 'main'
+              && eid == request.resource.data.claimId + '_main'
+              && getAfter(claimPath(request.resource.data.claimId)).data.get('evidenceId', '') == eid)
+          || (request.resource.data.kind == 'extra'
+              && eid.matches('^' + request.resource.data.claimId + '_x[0-9]{13}$')
+              && getAfter(claimPath(request.resource.data.claimId)).data.get('extraEvidenceId', '') == eid) );
+      allow update: if false;
+      allow delete: if isStaff();
+    }
+
+    // ---------- audit trail: staff append-only ----------
+    match /auditLogs/{aid} {
+      allow read: if isStaff();
+      allow create: if isStaff()
+        && request.resource.data.keys().hasOnly(['action','by','byName','targetType','targetId','detail','scope','at'])
+        && request.resource.data.by == request.auth.uid
+        && request.resource.data.at == request.time
+        && request.resource.data.get('detail', '').size() <= 500;
+      allow update, delete: if false;
+    }
+
+    // Everything else is closed to clients.
+    match /{document=**} { allow read, write: if false; }
+  }
+}
